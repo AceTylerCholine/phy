@@ -6,14 +6,14 @@ Code from http://eli.thegreenplace.net/2012/08/07/fundamental-concepts-of-plugin
 
 """
 
-
 #------------------------------------------------------------------------------
 # Imports
 #------------------------------------------------------------------------------
 
-import importlib
+import imp
 import logging
 import os
+import importlib.util
 from pathlib import Path
 
 from phylib.utils._misc import _fullname
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 #------------------------------------------------------------------------------
 
 class IPluginRegistry(type):
-    """Regjster all plugin instances."""
+    """Register all plugin instances."""
 
     plugins = []
 
@@ -84,16 +84,13 @@ def discover_plugins(dirs):
 
     Parameters
     ----------
-
     dirs : list
         List of directory names to scan.
 
     Returns
     -------
-
     plugins : list
         List of plugin classes.
-
     """
     # Scan all subdirectories recursively.
     for path in _iter_plugin_files(dirs):
@@ -101,16 +98,26 @@ def discover_plugins(dirs):
         modname = path.stem
         if modname in ('phy_config', 'phycontrib_loader'):
             continue
-        file, path, descr = importlib.util.find_spec(modname, [subdir])
-        if file:
-            # Loading the module registers the plugin in
-            # IPluginRegistry.
+        
+        try:
+            spec = importlib.util.find_spec(modname, [str(subdir)])
+            if spec is None:
+                raise ImportError(f"Could not find spec for module: {modname}")
+            
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            logger.debug(f"Successfully loaded module: {modname}")
+
+        except ImportError as e:
+            logger.warning(f"Could not find module: {modname}. Trying imp.find_module as fallback.")
             try:
-                mod = importlib.load_module(modname, file, path, descr)  # noqa
-            except Exception as e:  # pragma: no cover
-                logger.exception(e)
-            finally:
-                file.close()
+                file, path, descr = imp.find_module(modname, [str(subdir)])
+                if file:
+                    mod = imp.load_module(modname, file, path, descr)  # noqa
+                    file.close()
+                    logger.debug(f"Successfully loaded module with imp: {modname}")
+            except Exception as imp_e:  # pragma: no cover
+                logger.exception(imp_e)
     return IPluginRegistry.plugins
 
 
@@ -122,7 +129,6 @@ def attach_plugins(controller, plugins=None, config_dir=None, dirs=None):
 
     Parameters
     ----------
-
     controller : object
         The controller object that will be passed to the `attach_to_controller()` plugins methods.
     plugins : list of str
@@ -131,7 +137,6 @@ def attach_plugins(controller, plugins=None, config_dir=None, dirs=None):
         Path to the user configuration file. By default, the directory is `~/.phy/`.
 
     """
-
     plugins = plugins or []
     config = load_master_config(config_dir=config_dir)
     name = getattr(controller, 'gui_name', None) or controller.__class__.__name__
